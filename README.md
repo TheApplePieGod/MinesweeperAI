@@ -1,6 +1,6 @@
 # Minesweeper AI
 
-Various different [TensorFlow](https://www.tensorflow.org/) models and algorithms that plays minesweeper.
+Various different [TensorFlow](https://www.tensorflow.org/) models and algorithms that play minesweeper.
 
 # About
 - Model 1
