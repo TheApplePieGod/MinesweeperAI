@@ -1,7 +1,5 @@
 import os
-
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' 
-import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 import random
@@ -10,8 +8,6 @@ from collections import deque
 from tensorflow.keras import Model, Sequential
 from tensorflow.keras.layers import Dense, Conv2D, Flatten
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.models import load_model
-import progressbar
 import pygame
 import datetime as dt
 
@@ -135,9 +131,6 @@ for e in range(0, NUM_EPISODES):
     state = np.reshape(state, [1, *board.get_observation_shape()])
 
     episode_reward = 0
-    
-    bar = progressbar.ProgressBar(maxval=NUM_TIMESTEPS/10, widgets=[progressbar.Bar('=', '[', ']'), ' ', progressbar.Percentage()])
-    bar.start()
 
     for timestep in range(NUM_TIMESTEPS):
         # Select action
@@ -162,14 +155,10 @@ for e in range(0, NUM_EPISODES):
             
         if len(agent.memory) > BATCH_SIZE:
            agent.retrain()
-        
-        if timestep%10 == 0:
-            bar.update(timestep/10 + 1)
 
     with train_writer.as_default():
         tf.summary.scalar('rewards', episode_reward, e)
             
-    bar.finish()
     if (e + 1) % 10 == 0:
         print("**********************************")
         print("Episode: {}".format(e + 1))
