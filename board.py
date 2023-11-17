@@ -166,6 +166,16 @@ class Board:
                 indices.append(i)
         return np.array(observations), np.array(indices)
 
+    # Gets radius observation of all tiles on the board that are mines
+    def get_mine_observation(self):
+        observations = []
+        indices = []
+        for i in range(len(self.board)):
+            if self.is_mine(i) and not self.is_revealed(i):
+                observations.append(self.get_radius_observation(i))
+                indices.append(i)
+        return np.array(observations), np.array(indices)
+
     def get_observation_shape(self):
         radius = self.observation_radius
         size = radius * 2 + 1
@@ -325,6 +335,11 @@ class Board:
     def draw_attention_weights(self, surface: pygame.Surface, index, weights):
         radius = self.observation_radius
         size = radius * 2 + 1
+
+        # Extract & normalize attention with respect to the center tile
+        weights = weights[radius]
+        weights /= weights.max()
+
         cur_x = (index % self.width)
         cur_y = (index // self.width)
         for y in range(0, size):

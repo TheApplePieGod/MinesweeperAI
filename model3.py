@@ -32,7 +32,10 @@ class Agent(torch.nn.Module):
         self.num_heads = 16
         self.last_probabilities = []
 
-        self.embed = torch.nn.Embedding(self.input_dim, self.embed_dim)
+        self.poses = torch.arange(self.input_size)
+        self.state_embed = torch.nn.Embedding(self.input_dim, self.embed_dim)
+        self.pos_embed = torch.nn.Embedding(self.input_size, self.embed_dim)
+        self.ln = torch.nn.LayerNorm(self.embed_dim)
         self.attn = torch.nn.MultiheadAttention(
             self.embed_dim,
             self.num_heads,
@@ -42,14 +45,24 @@ class Agent(torch.nn.Module):
         self.dropout = torch.nn.Dropout(0.1)
         self.dense1 = torch.nn.Linear(self.embed_dim * self.input_size, 512)
         self.relu = torch.nn.ReLU()
-        self.dense2 = torch.nn.Linear(512, 256)
+        self.dense2 = torch.nn.Linear(512, 512)
         self.relu = torch.nn.ReLU()
-        self.dense3 = torch.nn.Linear(256, 1)
+        self.dense3 = torch.nn.Linear(512, 1)
         self.loss = torch.nn.BCELoss()
 
         self.optimizer = torch.optim.Adam(self.parameters())
 
-        self.load_state_dict(torch.load("weights/model3-v1"))
+        try:
+            self.load_state_dict(
+                torch.load("weights/model3-v2", map_location=device)
+            )
+        except:
+            pass
+
+    def embed(self, x):
+        state_embed = self.state_embed(x)
+        pos_embed = self.pos_embed(self.poses)
+        return self.ln(state_embed + pos_embed)
 
     def forward(self, x):
         embedding = self.embed(x)
@@ -77,8 +90,6 @@ class Agent(torch.nn.Module):
                 need_weights=True,
                 average_attn_weights=average
             )
-            # Scale by max value
-            weights /= torch.max(weights)
             return weights
 
     def train_once(self):
@@ -128,7 +139,7 @@ class Agent(torch.nn.Module):
         self.memory.append((state, mine_chance))
 
     def save_weights(self):
-        torch.save(self.state_dict(), "weights/model3-v1")
+        torch.save(self.state_dict(), "weights/model3-v2")
 
 
 if __name__ == "__main__":
@@ -210,6 +221,11 @@ if __name__ == "__main__":
                 if len(game_states) > 0:
                     for s in game_states:
                         agent.store(s[0], s[1])
+                    # Add in mine observations to match state cnount
+                    for s in board.get_mine_observation()[0]:
+                        # Ensure state is not primarily unrevealed
+                        if np.count_nonzero(s == 9) / s.shape[0] <= 0.5:
+                            agent.store(s, [1.0])
 
                     if len(agent.memory) >= BATCH_SIZE:
                         agent.train_once()

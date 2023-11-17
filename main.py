@@ -18,12 +18,13 @@ agent = Agent(board.get_observation_shape()[0])
 def make_ai_move():
     state, indices = board.get_observation()
     action, _ = agent.act(state, indices)
-    board.step(action)
+    return board.step(action)
 
 def main():
     block_selection = -1
+    autoplay = False
     while True:
-        step_turn = False
+        step_turn = autoplay
 
         # Check to see if we should quit the program
         for event in pygame.event.get():
@@ -36,6 +37,8 @@ def main():
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_SPACE:
                     step_turn = True
+                if event.key == pygame.K_RETURN:
+                    autoplay = not autoplay
 
         # Clear the window by filling it with white pixels
         DISPLAY.fill((255, 255, 255))
@@ -64,7 +67,9 @@ def main():
             if board.game_status != 0:
                 board.generate()
                 time.sleep(0.5)
-            make_ai_move()
+            terminated, is_loss = make_ai_move()
+            if is_loss:
+                autoplay = False
 
 # Start the main loop
 main() 
