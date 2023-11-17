@@ -1,6 +1,6 @@
 import pygame, sys, time
 from board import Board
-from model2 import Agent
+from model3 import Agent
 
 # Initialize pygame
 pygame.init()

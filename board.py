@@ -132,34 +132,32 @@ class Board:
 
     # Get the observational value of a given tile
     def get_tile_observation(self, index: int):
-        final = 0.0
         if not self.is_revealed(index):
-            final = 9.0
+            final = 9
         else:
-            final = self.get_num(index)
-        return np.float32(final / 9.0)
+            final = self.get_num(index) # 0-8
+        return final
 
     # Get observational values of all tiles in a given radius
     def get_radius_observation(self, index: int):
         radius = self.observation_radius
         size = radius * 2 + 1
-        mat = np.zeros((size, size, 1))
+        mat = np.zeros((size * size), dtype=np.int32)
         cur_x = (index % self.width)
         cur_y = (index // self.width)
         for y in range(0, size):
             for x in range(0, size):
                 new_x = (x - radius) + cur_x
                 new_y = (y - radius) + cur_y
-                if new_x < 0 or new_x >= self.width:
-                    continue
-                if new_y < 0 or new_y >= self.height:
+                if new_x < 0 or new_x >= self.width or new_y < 0 or new_y >= self.height:
+                    mat[x + y * size] = 9 # No information == 9
                     continue
                 new_index = new_x + (new_y * self.width)
-                mat[y][x][0] = self.get_tile_observation(new_index)
+                mat[x + y * size] = self.get_tile_observation(new_index)
         return mat
 
     # Gets radius observation of all tiles on the board that are not revealed 
-    def get_observation2(self):
+    def get_observation(self):
         observations = []
         indices = []
         for i in range(len(self.board)):
@@ -168,33 +166,10 @@ class Board:
                 indices.append(i)
         return np.array(observations), np.array(indices)
 
-    # Converts the board into a new array containing observations for
-    # the reinforcement learning algorithm. All values are removed if
-    # the tile is hidden
-    def get_observation(self):
-        new_board = np.zeros((self.height, self.width, 1))
-        index = 0
-        for r in range(len(new_board)):
-            for c in range(len(new_board[r])):
-                if self.has_flag(index):
-                    pass
-                elif not self.is_revealed(index):
-                    new_board[r][c][0] = -1
-                else:
-                    num = self.get_num(index)
-                    new_board[r][c][0] = num
-                index += 1
-        new_board = new_board.astype(np.float16)
-        # new_board /= 11.0
-        return new_board
-
     def get_observation_shape(self):
-        return (self.height, self.width, 1)
-
-    def get_observation2_shape(self):
         radius = self.observation_radius
         size = radius * 2 + 1
-        return (size, size, 1)
+        return (size * size,)
 
     # Each square can either reveal
     def get_action_size(self):
@@ -220,34 +195,9 @@ class Board:
             return False
         return True
 
-    # Update the board given an action and return values
-    # related to reinforcement learning
-    def step(self, action_val: int):
-        square = self.decode_action(action_val)
-        reward = 0.0
-
-        self.handle_first_click(square)
-
-        if not self.is_action_valid(action_val):
-            reward = -0.5 # Punish for illegal moves
-            self.game_status = 2
-        else:
-            is_guess = self.is_guess(square)
-            self.reveal(square)
-            if self.game_status == 2: # Lose
-                reward = -1.0
-            elif self.game_status == 1: # Win
-                reward = 1.0
-            else:
-                if is_guess:
-                    reward = -0.3
-                else:
-                    reward = 0.3
-        return self.get_observation(), reward, self.game_status != 0
-
     # Update the board given an action and return whether or not
     # the game has ended and whether or not the termination was a loss
-    def step2(self, action_val: int):
+    def step(self, action_val: int):
         square = self.decode_action(action_val)
 
         self.handle_first_click(square)
