@@ -2,13 +2,15 @@ import torch
 import pygame
 import random
 import numpy as np
+import datetime as dt
 from board import Board
 from collections import deque
+from torch.utils.tensorboard import SummaryWriter
 
 BATCH_SIZE = 128
 NUM_EPISODES = 1000000
 MAX_STEPS = 1000
-TRAIN_STEPS = 4
+EXPERIMENT_NAME = "model3-v2"
 
 """
 if torch.backends.mps.is_available():
@@ -31,6 +33,7 @@ class Agent(torch.nn.Module):
         self.embed_dim = 32
         self.num_heads = 16
         self.last_probabilities = []
+        self.train_steps = 0
 
         self.poses = torch.arange(self.input_size)
         self.state_embed = torch.nn.Embedding(self.input_dim, self.embed_dim)
@@ -54,7 +57,7 @@ class Agent(torch.nn.Module):
 
         try:
             self.load_state_dict(
-                torch.load("weights/model3-v2", map_location=device)
+                torch.load(f"weights/{EXPERIMENT_NAME}", map_location=device)
             )
         except:
             pass
@@ -96,6 +99,7 @@ class Agent(torch.nn.Module):
         self.train()
 
         total_loss = 0
+        total_acc = 0
         total_steps = 0
         minibatch = random.sample(self.memory, BATCH_SIZE)
         for i in range(1):
@@ -108,9 +112,12 @@ class Agent(torch.nn.Module):
             self.optimizer.step()
 
             total_loss += loss
+            total_acc += torch.sum(output == t)
             total_steps += 1
 
-        print(f"Avg loss: {total_loss / total_steps}")
+        self.train_steps += total_steps
+
+        return total_loss / total_steps, total_acc / total_steps
 
     def act(self, state, indices):
         # Predict mine probablities for each square
@@ -139,12 +146,13 @@ class Agent(torch.nn.Module):
         self.memory.append((state, mine_chance))
 
     def save_weights(self):
-        torch.save(self.state_dict(), "weights/model3-v2")
+        torch.save(self.state_dict(), f"weights/{EXPERIMENT_NAME}")
 
 
 if __name__ == "__main__":
     board = Board(16, 16, 40)
-
+    time_str = dt.datetime.now().strftime('%d%m%Y%H%M')
+    train_writer = SummaryWriter(f"summaries/{EXPERIMENT_NAME}_{time_str}")
     agent = Agent(board.get_observation_shape()[0])
 
     # Initialize pygame
@@ -199,13 +207,6 @@ if __name__ == "__main__":
             if game_step >= 4:
                 game_states.append((acting_state, [1.0 if is_loss else 0.0]))
 
-            # Train every TRAIN_STEPS or if the game is over
-            """
-            if game_step % TRAIN_STEPS == 0 or terminated:
-                if len(agent.memory) > BATCH_SIZE:
-                    agent.train_once()
-            """
-
             # Update visualization
             draw()
 
@@ -228,7 +229,7 @@ if __name__ == "__main__":
                             agent.store(s, [1.0])
 
                     if len(agent.memory) >= BATCH_SIZE:
-                        agent.train_once()
+                        loss, accuracy = agent.train_once()
                     else:
                         print(f"Memory size: {len(agent.memory)}")
 
@@ -242,6 +243,17 @@ if __name__ == "__main__":
             med_win_rate = med_wins / 10.0
             small_wins = 0
             med_wins = 0
+
+        if accuracy is not None:
+            train_writer.add_scalar('accuracy', accuracy, e)
+        if loss is not None:
+            train_writer.add_scalar('loss', loss, e)
+        if small_win_rate is not None:
+            train_writer.add_scalar('small_win_rate', small_win_rate, e)
+        if med_win_rate is not None:
+            train_writer.add_scalar('med_win_rate', med_win_rate, e)
+        train_writer.add_scalar('small_steps' if e % 2 == 0 else 'med_steps', game_step, e)
+        train_writer.flush()
 
         # Write graph data
         if (e + 1) % 50 == 0:
