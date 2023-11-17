@@ -6,7 +6,7 @@ import pygame
 import os
 from button import button
 
-GRID_SIZE = 25
+GRID_SIZE = 35
 SPACING_SIZE = 1
 IMAGES = {}
 
@@ -206,7 +206,7 @@ class Board:
             self.game_status = 2
         else:
             self.reveal(square)
-        
+
         # terminated, isLoss
         return self.game_status != 0, self.game_status == 2
 
@@ -236,12 +236,18 @@ class Board:
                 mine_count += self.is_mine(s)
             self.set_num(i, mine_count)
 
-    # Converts a mouse position to a board index and clicks
-    def click_pos(self, mouse_pos: Tuple[int, int], button: int) -> None:
+    def get_board_index_from_mouse(self, mouse_pos: Tuple[int, int]) -> int:
         x = trunc(mouse_pos[0] / (GRID_SIZE + SPACING_SIZE))
         y = trunc(mouse_pos[1] / (GRID_SIZE + SPACING_SIZE))
-        if x >= self.width or y >= self.height: return
-        index = x + y * self.width
+        if x >= self.width or y >= self.height:
+            return -1
+        return x + y * self.width
+
+    # Converts a mouse position to a board index and clicks
+    def click_pos(self, mouse_pos: Tuple[int, int], button: int) -> None:
+        index = self.get_board_index_from_mouse(mouse_pos)
+        if index == -1:
+            return
         self.click(index, button)
 
     # Must be called before board actions can take place
@@ -255,7 +261,7 @@ class Board:
                 #    pass
                 self.set_num(index, 0)
                 self.set_mine(i)
-                    
+
             self.populate_numbers()
             self.first_click = False
 
@@ -271,15 +277,24 @@ class Board:
         elif button == 3: # Right click
             self.set_flag(index)
 
+    def get_tile_coord(self, index) -> (int, int):
+        x = (index % self.width) * (GRID_SIZE + SPACING_SIZE) 
+        y = (index // self.width) * (GRID_SIZE + SPACING_SIZE)
+        return x, y
+
+    def draw_transparent_rect(self, surface, color, rect):
+        shape_surf = pygame.Surface(rect.size, pygame.SRCALPHA)
+        pygame.draw.rect(shape_surf, color, shape_surf.get_rect())
+        surface.blit(shape_surf, rect)
+
     def draw_board(self, surface: pygame.Surface) -> None:
         for i in range(len(self.board)):
-            x = (i % self.width) * (GRID_SIZE + SPACING_SIZE) 
-            y = (i // self.width) * (GRID_SIZE + SPACING_SIZE)
+            x, y = self.get_tile_coord(i)
             num = self.get_num(i)
 
             # Revealed base
             surface.blit(IMAGES["tile_revealed.png"], (x, y))
-            
+
             if num == 0: # Empty
                 if not self.is_revealed(i) and not self.show_nums:
                     surface.blit(IMAGES["tile_hidden.png"], (x, y))
@@ -306,6 +321,33 @@ class Board:
             font = pygame.font.SysFont('Corbel', 60, True)
             text = font.render("GAME OVER", True, (255, 0, 0))
             surface.blit(text, (0, 0))
+
+    def draw_attention_weights(self, surface: pygame.Surface, index, weights):
+        radius = self.observation_radius
+        size = radius * 2 + 1
+        cur_x = (index % self.width)
+        cur_y = (index // self.width)
+        for y in range(0, size):
+            for x in range(0, size):
+                new_x = (x - radius) + cur_x
+                new_y = (y - radius) + cur_y
+                if new_x < 0 or new_x >= self.width or new_y < 0 or new_y >= self.height:
+                    continue
+                weight = weights[y * size + x]
+                new_index = new_x + (new_y * self.width)
+                tile_x, tile_y = self.get_tile_coord(new_index)
+                self.draw_transparent_rect(
+                    surface,
+                    (255, 0, 0, weight * 255),
+                    pygame.Rect(tile_x, tile_y, GRID_SIZE, GRID_SIZE)
+                )
+
+    def draw_mine_chance(self, surface: pygame.Surface, chances, indices) -> None:
+        font = pygame.font.SysFont('Corbel',12)
+        for i, chance in enumerate(chances):
+            x, y = self.get_tile_coord(indices[i])
+            text = font.render(f"{chance[0] * 100:0.2f}%", True, (255, 0, 0))
+            surface.blit(text, (x, y + GRID_SIZE / 2))
 
     def draw_other(self, surface: pygame.Surface) -> None:
         y = self.height * (GRID_SIZE + SPACING_SIZE)

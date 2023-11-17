@@ -15,7 +15,11 @@ if torch.backends.mps.is_available():
     device = torch.device("mps")
     torch.set_default_device("mps")
 """
-device = torch.device("cpu")
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+    torch.set_default_device("cuda")
+else:
+    device = torch.device("cpu")
 
 class Agent(torch.nn.Module):
     def __init__(self, input_size):
@@ -26,6 +30,7 @@ class Agent(torch.nn.Module):
         self.input_dim = 10
         self.embed_dim = 32
         self.num_heads = 16
+        self.last_probabilities = []
 
         self.embed = torch.nn.Embedding(self.input_dim, self.embed_dim)
         self.attn = torch.nn.MultiheadAttention(
@@ -48,7 +53,7 @@ class Agent(torch.nn.Module):
 
     def forward(self, x):
         embedding = self.embed(x)
-        out, _ = self.attn(embedding, embedding, embedding)
+        out, _ = self.attn(embedding, embedding, embedding, need_weights=False)
         result = self.flat(out)
         result = self.dropout(result)
         result = self.dense1(result)
@@ -58,23 +63,23 @@ class Agent(torch.nn.Module):
         result = self.dense3(result)
         return torch.sigmoid(result)
 
-    def self_attention(x):
-        n, d = x.shape
-        d_q, d_k, d_v = 10, 10, 10
+    def get_attention_weights(self, x, average):
+        if isinstance(x, np.ndarray):
+            x = torch.from_numpy(x).to(device)
 
-        Wq = torch.nn.Linear(d, d_q, bias=False)  # d_q x d
-        Wk = torch.nn.Linear(d, d_k, bias=False)  # d_k x d
-        Wv = torch.nn.Linear(d, d_v, bias=False)  # d_v x d
-
-        Q = Wq(x)
-        K = Wk(x)
-        V = Wk(x)
-
-        attn_mat = (Q @ K.T) / d_k ** 0.5
-        attn_weights = torch.softmax(attn_mat, dim=0)
-
-        context_vec = attn_weights @ V
-        return context_vec
+        with torch.no_grad():
+            self.eval()
+            embedding = self.embed(x)
+            _, weights = self.attn(
+                embedding,
+                embedding,
+                embedding,
+                need_weights=True,
+                average_attn_weights=average
+            )
+            # Scale by max value
+            weights /= torch.max(weights)
+            return weights
 
     def train_once(self):
         self.train()
@@ -97,20 +102,25 @@ class Agent(torch.nn.Module):
         print(f"Avg loss: {total_loss / total_steps}")
 
     def act(self, state, indices):
+        # Predict mine probablities for each square
+        probabilities = self.get_probabilities(state)
+
+        # Select lowest probability
+        selection = torch.argmin(probabilities)
+
+        self.last_probabilities = probabilities
+
+        action = indices[selection]
+        return action, state[selection]
+
+    def get_probabilities(self, state):
         with torch.no_grad():
             self.eval()
-
-            # Predict mine probablities for each square 
-            s = torch.from_numpy(state).to(device)
-            probabilities = self.forward(s)
-
-            # Select lowest probability
-            selection = torch.argmin(probabilities)
-
-            self.last_probabilities = probabilities
-
-            action = indices[selection]
-            return action, state[selection]
+            if len(state.shape) == 2:
+                s = torch.from_numpy(state).to(device)
+            else:
+                s = torch.from_numpy(np.array([state])).to(device)
+            return self.forward(s)
 
     def store(self, state, mine_chance):
         if np.all(state == 9):
@@ -118,7 +128,7 @@ class Agent(torch.nn.Module):
         self.memory.append((state, mine_chance))
 
     def save_weights(self):
-        torch.save(self.state_dict(), "weights/model3-v1.5")
+        torch.save(self.state_dict(), "weights/model3-v1")
 
 
 if __name__ == "__main__":
@@ -170,7 +180,7 @@ if __name__ == "__main__":
             # Select action
             action, acting_state = agent.act(state, indices)
 
-            # Take action    
+            # Take action
             terminated, is_loss = board.step(action)
 
             # Store action in memory
