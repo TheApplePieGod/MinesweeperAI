@@ -12,7 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 BATCH_SIZE = 256
 NUM_EPISODES = 1000000
 MAX_STEPS = 1000
-EXPERIMENT_NAME = "model3-v3"
+EXPERIMENT_NAME = "model3-v4"
 
 """
 if torch.backends.mps.is_available():
@@ -26,17 +26,25 @@ else:
     device = torch.device("cpu")
 
 class PositionalEncoding(torch.nn.Module):
-    def __init__(self, embed_dim, max_seq_length):
+    def __init__(self, embed_dim, width, height):
         super(PositionalEncoding, self).__init__()
 
-        pe = torch.zeros(max_seq_length, embed_dim)
-        position = torch.arange(0, max_seq_length, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, embed_dim, 2).float() * -(math.log(10000.0) / embed_dim))
-
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-
-        self.register_buffer('pe', pe.unsqueeze(0))
+        if embed_dim % 4 != 0:
+            raise ValueError("Cannot use sin/cos positional encoding with "
+                             "odd dimension (got dim={:d})".format(embed_dim))
+        pe = torch.zeros(embed_dim, height, width)
+        # Each dimension use half of d_model
+        embed_dim = int(embed_dim / 2)
+        div_term = torch.exp(torch.arange(0., embed_dim, 2) *
+                             -(math.log(10000.0) / embed_dim))
+        pos_w = torch.arange(0., width).unsqueeze(1)
+        pos_h = torch.arange(0., height).unsqueeze(1)
+        pe[0:embed_dim:2, :, :] = torch.sin(pos_w * div_term).transpose(0, 1).unsqueeze(1).repeat(1, height, 1)
+        pe[1:embed_dim:2, :, :] = torch.cos(pos_w * div_term).transpose(0, 1).unsqueeze(1).repeat(1, height, 1)
+        pe[embed_dim::2, :, :] = torch.sin(pos_h * div_term).transpose(0, 1).unsqueeze(2).repeat(1, 1, width)
+        pe[embed_dim + 1::2, :, :] = torch.cos(pos_h * div_term).transpose(0, 1).unsqueeze(2).repeat(1, 1, width)
+        pe = pe.reshape((embed_dim * 2, height * width)).T.unsqueeze(0)
+        self.register_buffer('pe', pe)
 
     def forward(self, x):
         return x + self.pe[:, :x.size(1)]
@@ -66,20 +74,12 @@ class EncoderLayer(torch.nn.Module):
         return x
 
     def get_attention_weights(self, x, average):
-        if isinstance(x, np.ndarray):
-            x = torch.from_numpy(x).to(device)
-
-        with torch.no_grad():
-            self.eval()
-            embedding = self.embed(x)
-            _, weights = self.attn(
-                embedding,
-                embedding,
-                embedding,
-                need_weights=True,
-                average_attn_weights=average
-            )
-            return weights
+        _, weights = self.self_attn(
+            x, x, x,
+            need_weights=True,
+            average_attn_weights=average
+        )
+        return weights
 
 class Agent(torch.nn.Module):
     def __init__(self, input_size):
@@ -87,7 +87,7 @@ class Agent(torch.nn.Module):
 
         self.input_size = input_size
         self.memory = deque(maxlen=BATCH_SIZE * 8)
-        self.num_layers = 4
+        self.num_layers = 3
         self.input_dim = 10
         self.embed_dim = 32
         self.dense_dim = 512
@@ -97,14 +97,21 @@ class Agent(torch.nn.Module):
         self.train_steps = 0
 
         self.state_embed = torch.nn.Embedding(self.input_dim, self.embed_dim)
-        self.pos_embed = PositionalEncoding(self.embed_dim, self.input_size)
+        self.pos_embed = PositionalEncoding(
+            self.embed_dim,
+            int(self.input_size ** 0.5),
+            int(self.input_size ** 0.5)
+        )
         self.norm = torch.nn.LayerNorm(self.embed_dim)
         self.layers = torch.nn.ModuleList([
             EncoderLayer(self.embed_dim, self.num_heads, self.dense_dim, self.dropout)
             for i in range(self.num_layers)
         ])
         self.flat = torch.nn.Flatten()
-        self.dense = torch.nn.Linear(self.embed_dim * self.input_size, 1)
+        self.dense1 = torch.nn.Linear(self.embed_dim * self.input_size, self.dense_dim)
+        self.dense2 = torch.nn.Linear(self.dense_dim, self.dense_dim)
+        self.dense3 = torch.nn.Linear(self.dense_dim, 1)
+        self.relu = torch.nn.ReLU()
         self.loss = torch.nn.BCELoss()
 
         self.optimizer = torch.optim.Adam(self.parameters())
@@ -130,12 +137,25 @@ class Agent(torch.nn.Module):
         for layer in self.layers:
             result = layer(result)
         result = self.flat(result)
-        result = self.dense(result)
+        result = self.dense1(result)
+        result = self.relu(result)
+        result = self.dense2(result)
+        result = self.relu(result)
+        result = self.dense3(result)
         return torch.sigmoid(result)
 
     def get_attention_weights(self, x, average):
-        return []
-        #return self.
+        if isinstance(x, np.ndarray):
+            x = torch.from_numpy(x).unsqueeze(0).to(device)
+        x = self.embed(x)
+
+        weights = torch.zeros((1, self.input_size, self.input_size))
+        with torch.no_grad():
+            self.eval()
+            for layer in self.layers:
+                weights += layer.get_attention_weights(x, average)
+
+        return weights[0]
 
     def train_once(self):
         self.train()
