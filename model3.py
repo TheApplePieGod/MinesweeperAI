@@ -1,3 +1,4 @@
+import math
 import torch
 import pygame
 import random
@@ -7,10 +8,10 @@ from board import Board
 from collections import deque
 from torch.utils.tensorboard import SummaryWriter
 
-BATCH_SIZE = 128
+BATCH_SIZE = 256
 NUM_EPISODES = 1000000
 MAX_STEPS = 1000
-EXPERIMENT_NAME = "model3-v2"
+EXPERIMENT_NAME = "model3-v3"
 
 """
 if torch.backends.mps.is_available():
@@ -23,61 +24,45 @@ if torch.cuda.is_available():
 else:
     device = torch.device("cpu")
 
-class Agent(torch.nn.Module):
-    def __init__(self, input_size):
-        super(Agent, self).__init__()
+class PositionalEncoding(torch.nn.Module):
+    def __init__(self, embed_dim, max_seq_length):
+        super(PositionalEncoding, self).__init__()
 
-        self.input_size = input_size
-        self.memory = deque(maxlen=BATCH_SIZE * 8)
-        self.input_dim = 10
-        self.embed_dim = 32
-        self.num_heads = 16
-        self.last_probabilities = []
-        self.train_steps = 0
+        pe = torch.zeros(max_seq_length, embed_dim)
+        position = torch.arange(0, max_seq_length, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, embed_dim, 2).float() * -(math.log(10000.0) / embed_dim))
 
-        self.poses = torch.arange(self.input_size)
-        self.state_embed = torch.nn.Embedding(self.input_dim, self.embed_dim)
-        self.pos_embed = torch.nn.Embedding(self.input_size, self.embed_dim)
-        self.ln = torch.nn.LayerNorm(self.embed_dim)
-        self.attn = torch.nn.MultiheadAttention(
-            self.embed_dim,
-            self.num_heads,
-            batch_first=True
-        )
-        self.flat = torch.nn.Flatten()
-        self.dropout = torch.nn.Dropout(0.1)
-        self.dense1 = torch.nn.Linear(self.embed_dim * self.input_size, 512)
-        self.relu = torch.nn.ReLU()
-        self.dense2 = torch.nn.Linear(512, 512)
-        self.relu = torch.nn.ReLU()
-        self.dense3 = torch.nn.Linear(512, 1)
-        self.loss = torch.nn.BCELoss()
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
 
-        self.optimizer = torch.optim.Adam(self.parameters())
-
-        try:
-            self.load_state_dict(
-                torch.load(f"weights/{EXPERIMENT_NAME}", map_location=device)
-            )
-        except:
-            pass
-
-    def embed(self, x):
-        state_embed = self.state_embed(x)
-        pos_embed = self.pos_embed(self.poses)
-        return self.ln(state_embed + pos_embed)
+        self.register_buffer('pe', pe.unsqueeze(0))
 
     def forward(self, x):
-        embedding = self.embed(x)
-        out, _ = self.attn(embedding, embedding, embedding, need_weights=False)
-        result = self.flat(out)
-        result = self.dropout(result)
-        result = self.dense1(result)
-        result = self.relu(result)
-        result = self.dense2(result)
-        result = self.relu(result)
-        result = self.dense3(result)
-        return torch.sigmoid(result)
+        return x + self.pe[:, :x.size(1)]
+
+class EncoderLayer(torch.nn.Module):
+    def __init__(self, embed_dim, num_heads, dense_dim, dropout):
+        super(EncoderLayer, self).__init__()
+        self.self_attn = torch.nn.MultiheadAttention(
+            embed_dim,
+            num_heads,
+            batch_first=True
+        )
+        self.dense1 = torch.nn.Linear(embed_dim, dense_dim)
+        self.dense2 = torch.nn.Linear(dense_dim, embed_dim)
+        self.norm1 = torch.nn.LayerNorm(embed_dim)
+        self.norm2 = torch.nn.LayerNorm(embed_dim)
+        self.dropout = torch.nn.Dropout(dropout)
+        self.relu = torch.nn.ReLU()
+
+    def forward(self, x):
+        attn_output, _ = self.self_attn(x, x, x, need_weights=False)
+        x = self.norm1(x + self.dropout(attn_output))
+        ff_output = self.dense1(x)
+        ff_output = self.relu(ff_output)
+        ff_output = self.dense2(ff_output)
+        x = self.norm2(x + self.dropout(ff_output))
+        return x
 
     def get_attention_weights(self, x, average):
         if isinstance(x, np.ndarray):
@@ -94,6 +79,56 @@ class Agent(torch.nn.Module):
                 average_attn_weights=average
             )
             return weights
+
+class Agent(torch.nn.Module):
+    def __init__(self, input_size):
+        super(Agent, self).__init__()
+
+        self.input_size = input_size
+        self.memory = deque(maxlen=BATCH_SIZE * 8)
+        self.num_layers = 4
+        self.input_dim = 10
+        self.embed_dim = 32
+        self.num_heads = 8
+        self.last_probabilities = []
+        self.train_steps = 0
+
+        self.state_embed = torch.nn.Embedding(self.input_dim, self.embed_dim)
+        self.pos_embed = PositionalEncoding(self.embed_dim, self.input_size)
+        self.norm = torch.nn.LayerNorm(self.embed_dim)
+        self.layers = [
+            EncoderLayer(self.embed_dim, self.num_heads, 512, 0.1)
+            for i in range(self.num_layers)
+        ]
+        self.flat = torch.nn.Flatten()
+        self.dense = torch.nn.Linear(self.embed_dim * self.input_size, 1)
+        self.loss = torch.nn.BCELoss()
+
+        self.optimizer = torch.optim.Adam(self.parameters())
+
+        try:
+            self.load_state_dict(
+                torch.load(f"weights/{EXPERIMENT_NAME}", map_location=device)
+            )
+        except:
+            pass
+
+    def embed(self, x):
+        state_embed = self.state_embed(x)
+        pos_embed = self.pos_embed(state_embed)
+        return self.norm(pos_embed)
+
+    def forward(self, x):
+        result = self.embed(x)
+        for layer in self.layers:
+            result = layer(result)
+        result = self.flat(result)
+        result = self.dense(result)
+        return torch.sigmoid(result)
+
+    def get_attention_weights(self, x, average):
+        return []
+        #return self.
 
     def train_once(self):
         self.train()
@@ -112,7 +147,7 @@ class Agent(torch.nn.Module):
             self.optimizer.step()
 
             total_loss += loss
-            total_acc += torch.sum(output == t)
+            total_acc += torch.sum(torch.round(output) == t) / output.shape[1]
             total_steps += 1
 
         self.train_steps += total_steps
