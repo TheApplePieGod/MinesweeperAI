@@ -150,7 +150,7 @@ class Board:
                 new_x = (x - radius) + cur_x
                 new_y = (y - radius) + cur_y
                 if new_x < 0 or new_x >= self.width or new_y < 0 or new_y >= self.height:
-                    mat[x + y * size] = 9 # No information == 9
+                    mat[x + y * size] = 10 # No information == 10
                     continue
                 new_index = new_x + (new_y * self.width)
                 mat[x + y * size] = self.get_tile_observation(new_index)
