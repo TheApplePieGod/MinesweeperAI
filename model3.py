@@ -4,6 +4,7 @@ import pygame
 import random
 import numpy as np
 import datetime as dt
+from torchinfo import summary
 from board import Board
 from collections import deque
 from torch.utils.tensorboard import SummaryWriter
@@ -89,6 +90,8 @@ class Agent(torch.nn.Module):
         self.num_layers = 4
         self.input_dim = 10
         self.embed_dim = 32
+        self.dense_dim = 512
+        self.dropout = 0.1
         self.num_heads = 8
         self.last_probabilities = []
         self.train_steps = 0
@@ -96,15 +99,19 @@ class Agent(torch.nn.Module):
         self.state_embed = torch.nn.Embedding(self.input_dim, self.embed_dim)
         self.pos_embed = PositionalEncoding(self.embed_dim, self.input_size)
         self.norm = torch.nn.LayerNorm(self.embed_dim)
-        self.layers = [
-            EncoderLayer(self.embed_dim, self.num_heads, 512, 0.1)
+        self.layers = torch.nn.ModuleList([
+            EncoderLayer(self.embed_dim, self.num_heads, self.dense_dim, self.dropout)
             for i in range(self.num_layers)
-        ]
+        ])
         self.flat = torch.nn.Flatten()
         self.dense = torch.nn.Linear(self.embed_dim * self.input_size, 1)
         self.loss = torch.nn.BCELoss()
 
         self.optimizer = torch.optim.Adam(self.parameters())
+
+        summary(self, input_data=torch.zeros(1, self.input_size, dtype=torch.int))
+
+        # raise ValueError
 
         try:
             self.load_state_dict(
@@ -147,7 +154,7 @@ class Agent(torch.nn.Module):
             self.optimizer.step()
 
             total_loss += loss
-            total_acc += torch.sum(torch.round(output) == t) / output.shape[1]
+            total_acc += torch.sum(torch.round(output) == t) / output.shape[0]
             total_steps += 1
 
         self.train_steps += total_steps
