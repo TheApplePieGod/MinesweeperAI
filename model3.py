@@ -12,7 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 BATCH_SIZE = 256
 NUM_EPISODES = 1000000
 MAX_STEPS = 1000
-EXPERIMENT_NAME = "model3-v5"
+EXPERIMENT_NAME = "model3-v6"
 
 """
 if torch.backends.mps.is_available():
@@ -64,8 +64,8 @@ class EncoderLayer(torch.nn.Module):
         self.dropout = torch.nn.Dropout(dropout)
         self.relu = torch.nn.ReLU()
 
-    def forward(self, x):
-        attn_output, _ = self.self_attn(x, x, x, need_weights=False)
+    def forward(self, x, pos_embed):
+        attn_output, _ = self.self_attn(pos_embed, pos_embed, x, need_weights=False)
         x = self.norm1(x + self.dropout(attn_output))
         ff_output = self.dense1(x)
         ff_output = self.relu(ff_output)
@@ -73,9 +73,9 @@ class EncoderLayer(torch.nn.Module):
         x = self.norm2(x + self.dropout(ff_output))
         return x
 
-    def get_attention_weights(self, x, average):
+    def get_attention_weights(self, x, pos_embed, average):
         _, weights = self.self_attn(
-            x, x, x,
+            pos_embed, pos_embed, x,
             need_weights=True,
             average_attn_weights=average
         )
@@ -89,28 +89,30 @@ class Agent(torch.nn.Module):
         self.memory = deque(maxlen=BATCH_SIZE * 8)
         self.num_layers = 4
         self.input_dim = 11
-        self.embed_dim = 64
+        self.embed_dim = 32
+        self.micro_feature_dim = 128
+        self.macro_feature_dim = 64
         self.dense_dim = 512
         self.dropout = 0.1
-        self.num_heads = 16
+        self.num_heads = 8
         self.last_probabilities = []
         self.train_steps = 0
 
         self.state_embed = torch.nn.Embedding(self.input_dim, self.embed_dim)
+        self.conv1 = torch.nn.Conv2d(self.embed_dim, self.micro_feature_dim, 3, padding=1)
+        self.conv2 = torch.nn.Conv2d(self.micro_feature_dim, self.macro_feature_dim, 5, padding=2)
         self.pos_embed = PositionalEncoding(
-            self.embed_dim,
+            self.macro_feature_dim,
             int(self.input_size ** 0.5),
             int(self.input_size ** 0.5)
         )
-        self.norm = torch.nn.LayerNorm(self.embed_dim)
+        self.norm = torch.nn.LayerNorm(self.macro_feature_dim)
         self.layers = torch.nn.ModuleList([
-            EncoderLayer(self.embed_dim, self.num_heads, self.dense_dim, self.dropout)
+            EncoderLayer(self.macro_feature_dim, self.num_heads, self.dense_dim, self.dropout)
             for i in range(self.num_layers)
         ])
         self.flat = torch.nn.Flatten()
-        self.dense1 = torch.nn.Linear(self.embed_dim * self.input_size, self.dense_dim)
-        self.dense2 = torch.nn.Linear(self.dense_dim, self.dense_dim)
-        self.dense3 = torch.nn.Linear(self.dense_dim, 1)
+        self.dense1 = torch.nn.Linear(self.macro_feature_dim * self.input_size, 1)
         self.relu = torch.nn.ReLU()
         self.loss = torch.nn.BCELoss()
 
@@ -128,32 +130,46 @@ class Agent(torch.nn.Module):
             pass
 
     def embed(self, x):
-        state_embed = self.state_embed(x)
-        pos_embed = self.pos_embed(state_embed)
-        return self.norm(pos_embed)
+        result = self.state_embed(x)
+        result = result.permute(0, 2, 1)
+        result = result.reshape(
+            result.shape[0],
+            result.shape[1],
+            int(self.input_size ** 0.5),
+            int(self.input_size ** 0.5)
+        )
+        result = self.conv1(result)
+        result = self.relu(result)
+        result = self.conv2(result)
+        result = self.relu(result)
+        result = result.reshape(
+            result.shape[0],
+            result.shape[1],
+            self.input_size
+        ).permute(0, 2, 1)
+        result = self.norm(result)
+        pos_embed = self.pos_embed(result)
+        return result, pos_embed
 
     def forward(self, x):
-        result = self.embed(x)
+        result, pos_embed = self.embed(x)
         for layer in self.layers:
-            result = layer(result)
+            result = layer(result, pos_embed)
         result = self.flat(result)
         result = self.dense1(result)
-        result = self.relu(result)
-        result = self.dense2(result)
-        result = self.relu(result)
-        result = self.dense3(result)
         return torch.sigmoid(result)
 
     def get_attention_weights(self, x, average):
         if isinstance(x, np.ndarray):
             x = torch.from_numpy(x).unsqueeze(0).to(device)
-        x = self.embed(x)
+        x, pos_embed = self.embed(x)
 
         weights = torch.zeros((1, self.input_size, self.input_size))
         with torch.no_grad():
             self.eval()
             for layer in self.layers:
-                weights += layer.get_attention_weights(x, average)
+                weights += layer.get_attention_weights(x, pos_embed, average)
+                x = layer(x, pos_embed)
 
         return weights[0]
 

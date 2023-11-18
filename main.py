@@ -6,10 +6,12 @@ from model3 import Agent
 pygame.init()
 
 # Create the window that we will be drawing to
-DISPLAY = pygame.display.set_mode((1000, 800), 0, 32)
+DISPLAY = pygame.display.set_mode((1200, 800), 0, 32)
 
 # Initialize the board
-board = Board(16, 16, 40)
+#board = Board(9, 9, 10)
+#board = Board(16, 16, 40)
+board = Board(30, 16, 99)
 board.generate()
 
 # Initialize AI agent
