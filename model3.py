@@ -12,7 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 BATCH_SIZE = 256
 NUM_EPISODES = 1000000
 MAX_STEPS = 1000
-EXPERIMENT_NAME = "model3-v8.5"
+EXPERIMENT_NAME = "model3-v9"
 
 """
 if torch.backends.mps.is_available():
@@ -90,9 +90,8 @@ class Agent(torch.nn.Module):
         self.memory = deque(maxlen=BATCH_SIZE * 8)
         self.num_layers = 4
         self.input_dim = 11
-        self.atomic_feature_dim = 64
-        self.micro_feature_dim = 64
-        self.embed_dim = self.atomic_feature_dim + self.micro_feature_dim
+        self.micro_feature_dim = 128
+        self.embed_dim = 64
         self.dense_dim = 512
         self.dropout = 0.1
         self.num_heads = 16
@@ -100,12 +99,11 @@ class Agent(torch.nn.Module):
         self.train_steps = 0
 
         self.state_embed = torch.nn.Embedding(self.input_dim, state_embed_dim)
-        self.norm1 = torch.nn.LayerNorm(self.atomic_feature_dim)
-        self.norm2 = torch.nn.LayerNorm(self.micro_feature_dim)
-        self.conv1 = torch.nn.Conv2d(state_embed_dim, self.atomic_feature_dim, 1, padding=0)
-        self.conv2 = torch.nn.Conv2d(state_embed_dim, self.micro_feature_dim, 3, padding=1)
+        self.norm = torch.nn.LayerNorm(self.embed_dim)
+        self.conv1 = torch.nn.Conv2d(state_embed_dim, self.micro_feature_dim, 3, padding=1)
+        self.conv2 = torch.nn.Conv2d(self.micro_feature_dim, self.embed_dim, 3, padding=1)
         self.pos_embed = PositionalEncoding(
-            max(self.atomic_feature_dim, self.micro_feature_dim),
+            self.embed_dim,
             int(self.input_size ** 0.5),
             int(self.input_size ** 0.5)
         )
@@ -140,24 +138,18 @@ class Agent(torch.nn.Module):
             int(self.input_size ** 0.5),
             int(self.input_size ** 0.5)
         )
+        result = self.conv1(result)
+        result = self.relu(result)
+        result = self.conv2(result)
+        result = self.relu(result)
+        result = result.reshape(
+            result.shape[0],
+            result.shape[1],
+            self.input_size
+        ).permute(0, 2, 1)
+        result = self.norm(result)
 
-        feats = []
-        poses = []
-        for layer in [(self.conv1, self.norm1), (self.conv2, self.norm2)]:
-            out = layer[0](result)
-            out = self.relu(out)
-            out = out.reshape(
-                out.shape[0],
-                out.shape[1],
-                self.input_size
-            ).permute(0, 2, 1)
-            out = layer[1](out)
-
-            feats.append(out)
-            poses.append(self.pos_embed(out))
-
-        result = torch.cat(feats, 2)
-        pos_embed = torch.cat(poses, 2)
+        pos_embed = self.pos_embed(result)
         return result, pos_embed
 
     def forward(self, x):
