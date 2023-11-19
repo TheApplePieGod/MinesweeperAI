@@ -12,7 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 BATCH_SIZE = 256
 NUM_EPISODES = 1000000
 MAX_STEPS = 1000
-EXPERIMENT_NAME = "model3-v6"
+EXPERIMENT_NAME = "model3-v7"
 
 """
 if torch.backends.mps.is_available():
@@ -43,11 +43,11 @@ class PositionalEncoding(torch.nn.Module):
         pe[1:embed_dim:2, :, :] = torch.cos(pos_w * div_term).transpose(0, 1).unsqueeze(1).repeat(1, height, 1)
         pe[embed_dim::2, :, :] = torch.sin(pos_h * div_term).transpose(0, 1).unsqueeze(2).repeat(1, 1, width)
         pe[embed_dim + 1::2, :, :] = torch.cos(pos_h * div_term).transpose(0, 1).unsqueeze(2).repeat(1, 1, width)
-        pe = pe.reshape((embed_dim * 2, height * width)).T.unsqueeze(0)
+        pe = pe.reshape((embed_dim * 2, height * width)).permute(1, 0).unsqueeze(0)
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        return x + self.pe[:, :x.size(1)]
+        return self.pe[:, :x.size(1)]
 
 class EncoderLayer(torch.nn.Module):
     def __init__(self, embed_dim, num_heads, dense_dim, dropout):
@@ -99,8 +99,7 @@ class Agent(torch.nn.Module):
         self.train_steps = 0
 
         self.state_embed = torch.nn.Embedding(self.input_dim, self.embed_dim)
-        self.conv1 = torch.nn.Conv2d(self.embed_dim, self.micro_feature_dim, 3, padding=1)
-        self.conv2 = torch.nn.Conv2d(self.micro_feature_dim, self.macro_feature_dim, 5, padding=2)
+        self.conv1 = torch.nn.Conv2d(self.embed_dim, self.macro_feature_dim, 3, padding=1)
         self.pos_embed = PositionalEncoding(
             self.macro_feature_dim,
             int(self.input_size ** 0.5),
@@ -140,8 +139,6 @@ class Agent(torch.nn.Module):
         )
         result = self.conv1(result)
         result = self.relu(result)
-        result = self.conv2(result)
-        result = self.relu(result)
         result = result.reshape(
             result.shape[0],
             result.shape[1],
@@ -154,7 +151,7 @@ class Agent(torch.nn.Module):
     def forward(self, x):
         result, pos_embed = self.embed(x)
         for layer in self.layers:
-            result = layer(result, pos_embed)
+            result = layer(result, result + pos_embed)
         result = self.flat(result)
         result = self.dense1(result)
         return torch.sigmoid(result)
@@ -168,8 +165,8 @@ class Agent(torch.nn.Module):
         with torch.no_grad():
             self.eval()
             for layer in self.layers:
-                weights += layer.get_attention_weights(x, pos_embed, average)
-                x = layer(x, pos_embed)
+                weights += layer.get_attention_weights(x, x + pos_embed, average)
+                x = layer(x, x + pos_embed)
 
         return weights[0]
 
