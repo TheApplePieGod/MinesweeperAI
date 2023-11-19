@@ -12,7 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 BATCH_SIZE = 256
 NUM_EPISODES = 1000000
 MAX_STEPS = 1000
-EXPERIMENT_NAME = "model3-v9"
+EXPERIMENT_NAME = "model3-v9.5"
 
 """
 if torch.backends.mps.is_available():
@@ -88,7 +88,7 @@ class Agent(torch.nn.Module):
         state_embed_dim = 32
         self.input_size = input_size
         self.memory = deque(maxlen=BATCH_SIZE * 8)
-        self.num_layers = 4
+        self.num_layers = 6
         self.input_dim = 11
         self.micro_feature_dim = 128
         self.embed_dim = 64
@@ -284,7 +284,11 @@ if __name__ == "__main__":
             # Store action in memory
             # Skip first few plays because they are likely to be random
             if game_step >= 4:
-                game_states.append((acting_state, [1.0 if is_loss else 0.0]))
+                # Ignore guess moves
+                if board.is_guess(board.decode_action(action)):
+                    game_states.append((acting_state, [0.5]))
+                else:
+                    game_states.append((acting_state, [1.0 if is_loss else 0.0]))
 
             # Update visualization
             draw()
@@ -302,10 +306,11 @@ if __name__ == "__main__":
                     for s in game_states:
                         agent.store(s[0], s[1])
                     # Add in mine observations to match state cnount
-                    for s in board.get_mine_observation()[0]:
+                    m_s, m_i = board.get_mine_observation()
+                    for i in range(len(m_s)):
                         # Ensure state is not primarily unrevealed
-                        if np.count_nonzero(s == 9) / s.shape[0] <= 0.5:
-                            agent.store(s, [1.0])
+                        if not board.is_guess(i):
+                            agent.store(m_s[i], [1.0])
 
                     if len(agent.memory) >= BATCH_SIZE:
                         loss, accuracy = agent.train_once()

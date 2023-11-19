@@ -134,6 +134,8 @@ class Board:
     def get_tile_observation(self, index: int):
         if not self.is_revealed(index):
             final = 9
+        elif self.is_mine(index): # Case when we observe after a mine has been revealed
+            final = 9
         else:
             final = self.get_num(index) # 0-8
         return final

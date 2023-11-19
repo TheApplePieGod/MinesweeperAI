@@ -10,8 +10,8 @@ DISPLAY = pygame.display.set_mode((1200, 800), 0, 32)
 
 # Initialize the board
 #board = Board(9, 9, 10)
-#board = Board(16, 16, 40)
-board = Board(30, 16, 99)
+board = Board(16, 16, 40)
+#board = Board(30, 16, 99)
 board.generate()
 
 # Initialize AI agent
