@@ -12,7 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 BATCH_SIZE = 256
 NUM_EPISODES = 1000000
 MAX_STEPS = 1000
-EXPERIMENT_NAME = "model3-v7"
+EXPERIMENT_NAME = "model3-v8.5"
 
 """
 if torch.backends.mps.is_available():
@@ -85,33 +85,36 @@ class Agent(torch.nn.Module):
     def __init__(self, input_size):
         super(Agent, self).__init__()
 
+        state_embed_dim = 32
         self.input_size = input_size
         self.memory = deque(maxlen=BATCH_SIZE * 8)
         self.num_layers = 4
         self.input_dim = 11
-        self.embed_dim = 32
-        self.micro_feature_dim = 128
-        self.macro_feature_dim = 64
+        self.atomic_feature_dim = 64
+        self.micro_feature_dim = 64
+        self.embed_dim = self.atomic_feature_dim + self.micro_feature_dim
         self.dense_dim = 512
         self.dropout = 0.1
-        self.num_heads = 8
+        self.num_heads = 16
         self.last_probabilities = []
         self.train_steps = 0
 
-        self.state_embed = torch.nn.Embedding(self.input_dim, self.embed_dim)
-        self.conv1 = torch.nn.Conv2d(self.embed_dim, self.macro_feature_dim, 3, padding=1)
+        self.state_embed = torch.nn.Embedding(self.input_dim, state_embed_dim)
+        self.norm1 = torch.nn.LayerNorm(self.atomic_feature_dim)
+        self.norm2 = torch.nn.LayerNorm(self.micro_feature_dim)
+        self.conv1 = torch.nn.Conv2d(state_embed_dim, self.atomic_feature_dim, 1, padding=0)
+        self.conv2 = torch.nn.Conv2d(state_embed_dim, self.micro_feature_dim, 3, padding=1)
         self.pos_embed = PositionalEncoding(
-            self.macro_feature_dim,
+            max(self.atomic_feature_dim, self.micro_feature_dim),
             int(self.input_size ** 0.5),
             int(self.input_size ** 0.5)
         )
-        self.norm = torch.nn.LayerNorm(self.macro_feature_dim)
         self.layers = torch.nn.ModuleList([
-            EncoderLayer(self.macro_feature_dim, self.num_heads, self.dense_dim, self.dropout)
+            EncoderLayer(self.embed_dim, self.num_heads, self.dense_dim, self.dropout)
             for i in range(self.num_layers)
         ])
         self.flat = torch.nn.Flatten()
-        self.dense1 = torch.nn.Linear(self.macro_feature_dim * self.input_size, 1)
+        self.dense1 = torch.nn.Linear(self.embed_dim * self.input_size, 1)
         self.relu = torch.nn.ReLU()
         self.loss = torch.nn.BCELoss()
 
@@ -137,15 +140,24 @@ class Agent(torch.nn.Module):
             int(self.input_size ** 0.5),
             int(self.input_size ** 0.5)
         )
-        result = self.conv1(result)
-        result = self.relu(result)
-        result = result.reshape(
-            result.shape[0],
-            result.shape[1],
-            self.input_size
-        ).permute(0, 2, 1)
-        result = self.norm(result)
-        pos_embed = self.pos_embed(result)
+
+        feats = []
+        poses = []
+        for layer in [(self.conv1, self.norm1), (self.conv2, self.norm2)]:
+            out = layer[0](result)
+            out = self.relu(out)
+            out = out.reshape(
+                out.shape[0],
+                out.shape[1],
+                self.input_size
+            ).permute(0, 2, 1)
+            out = layer[1](out)
+
+            feats.append(out)
+            poses.append(self.pos_embed(out))
+
+        result = torch.cat(feats, 2)
+        pos_embed = torch.cat(poses, 2)
         return result, pos_embed
 
     def forward(self, x):
