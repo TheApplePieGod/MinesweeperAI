@@ -12,7 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 BATCH_SIZE = 256
 NUM_EPISODES = 1000000
 MAX_STEPS = 1000
-EXPERIMENT_NAME = "model3-v9.5"
+EXPERIMENT_NAME = "model3-v9-nano"
 
 """
 if torch.backends.mps.is_available():
@@ -85,16 +85,16 @@ class Agent(torch.nn.Module):
     def __init__(self, input_size):
         super(Agent, self).__init__()
 
-        state_embed_dim = 32
+        state_embed_dim = 16
         self.input_size = input_size
         self.memory = deque(maxlen=BATCH_SIZE * 8)
-        self.num_layers = 6
+        self.num_layers = 4
         self.input_dim = 11
-        self.micro_feature_dim = 128
-        self.embed_dim = 64
-        self.dense_dim = 512
+        self.micro_feature_dim = 16
+        self.embed_dim = 16
+        self.dense_dim = 64
         self.dropout = 0.1
-        self.num_heads = 16
+        self.num_heads = 8
         self.last_probabilities = []
         self.train_steps = 0
 
