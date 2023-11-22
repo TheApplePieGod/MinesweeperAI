@@ -30,6 +30,7 @@ class Board:
         self.game_status = 0 # 0: Playing, 1: Win, 2: Loss
         self.first_click = True
         self.board = np.array([], np.ubyte)
+        self.last_updated = np.array([])
         self.hidden = []
         self.show_mines = False
         self.show_nums = False
@@ -74,6 +75,7 @@ class Board:
         self.board[index] |= np.ubyte(16)
 
         self.hidden.remove(index)
+        self.last_updated[index] = True
 
         if self.is_mine(index):
             self.game_status = 2
@@ -147,6 +149,7 @@ class Board:
         mat = np.zeros((size * size), dtype=np.int32)
         cur_x = (index % self.width)
         cur_y = (index // self.width)
+        is_updated = False
         for y in range(0, size):
             for x in range(0, size):
                 new_x = (x - radius) + cur_x
@@ -156,17 +159,22 @@ class Board:
                     continue
                 new_index = new_x + (new_y * self.width)
                 mat[x + y * size] = self.get_tile_observation(new_index)
-        return mat
+                is_updated |= self.last_updated[new_index]
+        return mat, is_updated
 
     # Gets radius observation of all tiles on the board that are not revealed 
-    def get_observation(self):
+    def get_observation(self, only_updated=False):
         observations = []
         indices = []
         for i in range(len(self.board)):
             if not self.is_revealed(i):
-                observations.append(self.get_radius_observation(i))
+                obs, is_updated = self.get_radius_observation(i)
+                if only_updated and not is_updated:
+                    observations.append(None)
+                else:
+                    observations.append(obs)
                 indices.append(i)
-        return np.array(observations), np.array(indices)
+        return observations, indices
 
     # Gets radius observation of all tiles on the board that are mines
     def get_mine_observation(self):
@@ -174,9 +182,10 @@ class Board:
         indices = []
         for i in range(len(self.board)):
             if self.is_mine(i) and not self.is_revealed(i):
-                observations.append(self.get_radius_observation(i))
+                obs, is_updated = self.get_radius_observation(i)
+                observations.append(obs)
                 indices.append(i)
-        return np.array(observations), np.array(indices)
+        return observations, indices
 
     def get_observation_shape(self):
         radius = self.observation_radius
@@ -210,8 +219,9 @@ class Board:
     # Update the board given an action and return whether or not
     # the game has ended and whether or not the termination was a loss
     def step(self, action_val: int):
-        square = self.decode_action(action_val)
+        self.last_updated = np.array([False] * self.width * self.height)
 
+        square = self.decode_action(action_val)
         self.handle_first_click(square)
 
         if not self.is_action_valid(action_val):
@@ -225,6 +235,7 @@ class Board:
     # Reset the board and generate mines
     def generate(self) -> None:
         self.board = np.array([np.ubyte(0)] * self.width * self.height, np.ubyte)
+        self.last_updated = np.array([True] * self.width * self.height)
         self.hidden = [i for i in range(len(self.board))]
         self.score = 0
         self.flagged_mines = 0

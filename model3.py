@@ -12,7 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 BATCH_SIZE = 256
 NUM_EPISODES = 1000000
 MAX_STEPS = 1000
-EXPERIMENT_NAME = "model3-v11"
+EXPERIMENT_NAME = "model3-v9-nano-expert"
 
 """
 if torch.backends.mps.is_available():
@@ -23,6 +23,7 @@ if torch.cuda.is_available():
     device = torch.device("cuda")
     torch.set_default_device("cuda")
 else:
+    print("Default device CPU")
     device = torch.device("cpu")
 
 class PositionalEncoding(torch.nn.Module):
@@ -90,13 +91,13 @@ class Agent(torch.nn.Module):
         self.memory = deque(maxlen=BATCH_SIZE * 8)
         self.num_layers = 4
         self.input_dim = 11
-        self.micro_feature_dim = 32
-        self.embed_dim = 32
-        self.dense_dim = 128
+        self.micro_feature_dim = 16
+        self.embed_dim = 16
+        self.dense_dim = 64
         self.dropout = 0.1
         self.num_heads = 8
-        self.last_probabilities = []
         self.train_steps = 0
+        self.cached_inference = {}
 
         self.state_embed = torch.nn.Embedding(self.input_dim, state_embed_dim)
         self.norm = torch.nn.LayerNorm(self.embed_dim)
@@ -199,16 +200,41 @@ class Agent(torch.nn.Module):
         return total_loss / total_steps, total_acc / total_steps
 
     def act(self, state, indices):
+        cached_probs = []
+        predict_state = []
+        for i, s in enumerate(state):
+            if s is None:  # Cached
+                cached_probs.append(self.cached_inference[indices[i]])
+            else:
+                predict_state.append(s)
+
         # Predict mine probablities for each square
-        probabilities = self.get_probabilities(state)
+        probabilities = self.get_probabilities(np.array(predict_state))
+
+        # print(f"Infer count: {len(predict_state)}")
 
         # Select lowest probability
-        selection = torch.argmin(probabilities)
+        lowest_prob = 999999.0
+        idx, state_sel, cache_index = -1, None, 0
+        for i, s in enumerate(state):
+            if s is None:  # Cached
+                prob = cached_probs[cache_index][0]
+                actual_state = cached_probs[cache_index][1]
+                cache_index += 1
+            else:
+                prob = probabilities[i - cache_index]
+                actual_state = s
+                self.cached_inference[indices[i]] = (prob, s)
+            if prob < lowest_prob:
+                lowest_prob = prob
+                idx = i
+                state_sel = actual_state
 
-        self.last_probabilities = probabilities
+        action = indices[idx]
+        return action, state_sel
 
-        action = indices[selection]
-        return action, state[selection]
+    def reset_game(self):
+        self.cached_probs = {}
 
     def get_probabilities(self, state):
         with torch.no_grad():
@@ -238,7 +264,7 @@ if __name__ == "__main__":
     pygame.init()
 
     # Create the window that we will be drawing to
-    window = pygame.display.set_mode((1000, 800), 0, 32)
+    window = pygame.display.set_mode((1200, 800), 0, 32)
 
     def draw():
         # Wait for events
@@ -257,17 +283,22 @@ if __name__ == "__main__":
     small_wins = 0
     med_win_rate = None
     med_wins = 0
+    exp_win_rate = None
+    exp_wins = 0
     loss = None
     accuracy = None
     for e in range(0, NUM_EPISODES):
         # Reset the enviroment
         # Switch off training a small and medium board
-        if e % 2 == 0:
+        if e % 3 == 0:
             board = Board(9, 9, 10)
-        else:
+        elif e % 3 == 1:
             board = Board(16, 16, 40)
+        else:
+            board = Board(30, 16, 99)
         board.generate()
-        state, indices = board.get_observation()
+        agent.reset_game()
+        state, indices = board.get_observation(True)
 
         episode_reward = 0
         game_step = 0
@@ -296,10 +327,12 @@ if __name__ == "__main__":
             if terminated:
                 print('Episode {} end after n steps = {}'.format(e, game_step))
                 if not is_loss > 0.0: # Win
-                    if e % 2 == 0:
+                    if e % 3 == 0:
                         small_wins += 1
-                    else:
+                    elif e % 3 == 1:
                         med_wins += 1
+                    else:
+                        exp_wins += 1
 
                 # Add game states to memory if valid
                 if len(game_states) > 0:
@@ -319,14 +352,16 @@ if __name__ == "__main__":
 
                 break
 
-            state, indices = board.get_observation()
+            state, indices = board.get_observation(True)
 
         # Average win rate over 10 games for each board type
-        if (e + 1) % 20 == 0:
+        if (e + 1) % 30 == 0:
             small_win_rate = small_wins / 10.0
             med_win_rate = med_wins / 10.0
+            exp_win_rate = exp_wins / 10.0
             small_wins = 0
             med_wins = 0
+            exp_wins = 0
 
         if accuracy is not None:
             train_writer.add_scalar('accuracy', accuracy, e)
@@ -336,7 +371,16 @@ if __name__ == "__main__":
             train_writer.add_scalar('small_win_rate', small_win_rate, e)
         if med_win_rate is not None:
             train_writer.add_scalar('med_win_rate', med_win_rate, e)
-        train_writer.add_scalar('small_steps' if e % 2 == 0 else 'med_steps', game_step, e)
+        if exp_win_rate is not None:
+            train_writer.add_scalar('exp_win_rate', exp_win_rate, e)
+
+        if e % 3 == 0:
+            train_writer.add_scalar('small_steps', game_step, e)
+        elif e % 3 == 1:
+            train_writer.add_scalar('med_steps', game_step, e)
+        else:
+            train_writer.add_scalar('exp_steps', game_step, e)
+
         train_writer.flush()
 
         # Write graph data

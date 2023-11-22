@@ -1,6 +1,7 @@
 import pygame, sys, time
 from board import Board
 from model3 import Agent
+import numpy as np
 
 # Initialize pygame
 pygame.init()
@@ -18,7 +19,7 @@ board.generate()
 agent = Agent(board.get_observation_shape()[0])
 
 def make_ai_move():
-    state, indices = board.get_observation()
+    state, indices = board.get_observation(True)
     action, _ = agent.act(state, indices)
     return board.step(action)
 
@@ -46,8 +47,8 @@ def main():
         DISPLAY.fill((255, 255, 255))
 
         # Draw the board
-        state, indices = board.get_observation()
-        probs = agent.get_probabilities(state)
+        state, indices = board.get_observation(False)
+        probs = agent.get_probabilities(np.array(state))
         board.draw_board(DISPLAY)
         if block_selection != -1:
             for i, idx in enumerate(indices):
@@ -55,7 +56,7 @@ def main():
                     board.draw_attention_weights(
                         DISPLAY,
                         idx,
-                        agent.get_attention_weights(state[i], True),
+                        agent.get_attention_weights(np.array(state[i]), True),
                     )
                     break
         board.draw_mine_chance(DISPLAY, probs, indices)
@@ -65,13 +66,14 @@ def main():
         pygame.display.update()
 
         if step_turn:
-            time.sleep(0.2)
+            #time.sleep(0.2)
             if board.game_status != 0:
                 board.generate()
-                time.sleep(0.5)
+                agent.reset_game()
+                #time.sleep(0.5)
             terminated, is_loss = make_ai_move()
-            if is_loss:
-                autoplay = False
+            #if is_loss:
+            #    autoplay = False
 
 # Start the main loop
 main() 
